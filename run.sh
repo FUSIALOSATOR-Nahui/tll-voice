@@ -27,4 +27,4 @@ if [ -f ".env" ]; then
 fi
 
 echo "[launch] Starting TLL-Voice..."
-python3 main.py
+python3 main.py "$@"

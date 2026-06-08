@@ -40,23 +40,63 @@ class AudioRecorder:
         self.q = queue.Queue()
         self.stream = None
         self.recording = False
+        self.current_rms = 0.0
+        self.last_audio_data = None
 
     def callback(self, indata, frames, time_info, status):
         if status:
             print(f"[Audio Status] {status}", file=sys.stderr)
         self.q.put(indata.copy())
+        
+        # Calculate real-time RMS for the VU meter animation
+        try:
+            rms = np.sqrt(np.mean(indata.astype(np.float32) ** 2))
+            self.current_rms = float(rms)
+        except Exception:
+            self.current_rms = 0.0
 
     def start(self):
         self.q = queue.Queue()
         self.recording = True
-        self.stream = sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=self.channels,
-            device=self.device_index,
-            dtype='int16',
-            callback=self.callback
-        )
-        self.stream.start()
+        self.current_rms = 0.0
+        self.last_audio_data = None
+        
+        # Dynamically probe for a sample rate supported by the device
+        sample_rates_to_try = [self.sample_rate]
+        
+        try:
+            dev_info = sd.query_devices(self.device_index)
+            dev_default_rate = int(dev_info.get('default_samplerate', 0))
+            if dev_default_rate > 0 and dev_default_rate not in sample_rates_to_try:
+                sample_rates_to_try.append(dev_default_rate)
+        except Exception:
+            pass
+            
+        for rate in [16000, 48000, 44100, 32000, 24000, 8000]:
+            if rate not in sample_rates_to_try:
+                sample_rates_to_try.append(rate)
+                
+        last_error = None
+        for rate in sample_rates_to_try:
+            try:
+                self.stream = sd.InputStream(
+                    samplerate=rate,
+                    channels=self.channels,
+                    device=self.device_index,
+                    dtype='int16',
+                    callback=self.callback
+                )
+                self.stream.start()
+                if rate != self.sample_rate:
+                    print(f"[Audio] Изменен Sample Rate с {self.sample_rate} на {rate} для совместимости с микрофоном.")
+                    self.sample_rate = rate
+                return
+            except Exception as e:
+                last_error = e
+                continue
+                
+        self.recording = False
+        raise last_error if last_error else Exception("Не удалось открыть InputStream")
 
     def stop(self):
         self.recording = False
@@ -69,9 +109,12 @@ class AudioRecorder:
         while not self.q.empty():
             data.append(self.q.get())
         if not data:
+            self.last_audio_data = None
             return None
         
         audio_data = np.concatenate(data, axis=0)
+        self.last_audio_data = audio_data
+        
         wav_io = io.BytesIO()
         with wave.open(wav_io, 'wb') as wf:
             wf.setnchannels(self.channels)
@@ -113,9 +156,10 @@ class Overlay:
         self.frame.pack(fill=tk.BOTH, expand=True)
         
         # Canvas for status indicator light
-        self.canvas = tk.Canvas(self.frame, width=30, height=30, bg=self.bg_color, bd=0, highlightthickness=0)
-        self.canvas.pack(side=tk.LEFT, padx=(15, 10))
-        self.indicator = self.canvas.create_oval(5, 5, 25, 25, fill="gray", outline="")
+        self.canvas = tk.Canvas(self.frame, width=36, height=36, bg=self.bg_color, bd=0, highlightthickness=0)
+        self.canvas.pack(side=tk.LEFT, padx=(12, 10))
+        self.indicator = self.canvas.create_oval(8, 8, 28, 28, fill="gray", outline="")
+        self.current_radius = 10.0
         
         # Text labels
         self.label_title = tk.Label(self.frame, text="TLL-Voice", font=("Segoe UI", 10, "bold"), fg="#89b4fa", bg=self.bg_color)
@@ -124,7 +168,6 @@ class Overlay:
         self.label_status = tk.Label(self.frame, text="Запуск...", font=("Segoe UI", 9), fg=self.text_color, bg=self.bg_color)
         self.label_status.pack(anchor=tk.W, pady=(2, 10))
         
-        self.pulse_state = False
         self.dot_count = 0
         self.current_state = STATE_IDLE
         self.fade_after_id = None
@@ -143,7 +186,6 @@ class Overlay:
             self.label_title.configure(text=f"ЗАПИСЬ [{mode_name}]", fg=self.accent_red)
             self.label_status.configure(text="Говорите... Нажмите хоткей еще раз")
             self.canvas.itemconfigure(self.indicator, fill=self.accent_red)
-            self.pulse_recording()
         elif state == STATE_PROCESSING:
             self.label_title.configure(text="ОБРАБОТКА", fg=self.accent_yellow)
             self.label_status.configure(text="Отправка в Gemini...")
@@ -210,13 +252,36 @@ class Overlay:
             self.root.withdraw()
             self.fade_after_id = None
 
-    def pulse_recording(self):
+    def update_vu_indicator(self, recorder):
         if self.current_state != STATE_RECORDING:
+            # Restore default size (centered at 18, 18, radius 10)
+            cx, cy = 18, 18
+            self.canvas.coords(self.indicator, cx - 10, cy - 10, cx + 10, cy + 10)
             return
-        color = self.accent_red if self.pulse_state else "#45475a"
-        self.canvas.itemconfigure(self.indicator, fill=color)
-        self.pulse_state = not self.pulse_state
-        self.root.after(600, self.pulse_recording)
+            
+        rms = getattr(recorder, "current_rms", 0.0)
+        
+        # Map RMS (approx. 100 to 3000) to 0.0 - 1.0 range
+        min_rms = 100.0
+        max_rms = 3000.0
+        if rms < min_rms:
+            norm = 0.0
+        else:
+            norm = min(1.0, (rms - min_rms) / (max_rms - min_rms))
+            
+        min_r = 10.0
+        max_r = 17.0
+        target_r = min_r + norm * (max_r - min_r)
+        
+        # Easing/Smoothing: 15% step towards target
+        self.current_radius += 0.15 * (target_r - self.current_radius)
+        
+        # Update coordinates on canvas (centered at 18, 18)
+        cx, cy = 18, 18
+        r = self.current_radius
+        self.canvas.coords(self.indicator, cx - r, cy - r, cx + r, cy + r)
+        
+        self.root.after(30, lambda: self.update_vu_indicator(recorder))
 
     def animate_processing(self):
         if self.current_state != STATE_PROCESSING:
@@ -280,30 +345,54 @@ class TLLVoiceApp:
     def setup_audio(self):
         # Auto-detect default microphone if index is None or invalid
         device_idx = self.config["audio"].get("device_index")
-        devices = sd.query_devices()
         
-        if device_idx is None:
-            # Look for default input device
-            default_device = sd.default.device[0]
-            if default_device >= 0:
-                self.config["audio"]["device_index"] = default_device
-                print(f"[Audio] Выбран дефолтный микрофон index {default_device}: {devices[default_device]['name']}")
-            else:
-                # Find first device with input channels
-                for idx, dev in enumerate(devices):
-                    if dev['max_input_channels'] > 0:
-                        self.config["audio"]["device_index"] = idx
-                        print(f"[Audio] Выбран первый доступный микрофон index {idx}: {dev['name']}")
-                        break
+        try:
+            devices = sd.query_devices()
+        except Exception as e:
+            print(f"[Audio Error] Не удалось перечислить устройства: {e}", file=sys.stderr)
+            devices = []
+            
+        # Helper to find first valid input device in the system
+        def find_first_input_device():
+            for idx, dev in enumerate(devices):
+                if dev.get('max_input_channels', 0) > 0:
+                    return idx
+            return None
+
+        # Helper to check if a specific index is a valid input device
+        def is_valid_input_device(idx):
+            if idx is None or not isinstance(idx, int):
+                return False
+            if idx < 0 or idx >= len(devices):
+                return False
+            return devices[idx].get('max_input_channels', 0) > 0
+
+        # Validate the configured device_idx
+        if is_valid_input_device(device_idx):
+            print(f"[Audio] Используется микрофон из конфигурации index {device_idx}: {devices[device_idx]['name']}")
         else:
+            if device_idx is not None:
+                print(f"[Audio Warning] Микрофон с индексом {device_idx} недоступен или не является устройством ввода.", file=sys.stderr)
+            
+            # Fallback 1: Try default input device
+            default_device = -1
             try:
-                dev = devices[device_idx]
-                print(f"[Audio] Задан микрофон из конфига index {device_idx}: {dev['name']}")
-            except IndexError:
-                print(f"[Audio] Микрофон с индексом {device_idx} не найден. Сканирую устройства...", file=sys.stderr)
-                # Fallback to default
                 default_device = sd.default.device[0]
-                self.config["audio"]["device_index"] = default_device if default_device >= 0 else None
+            except Exception:
+                pass
+                
+            if is_valid_input_device(default_device):
+                self.config["audio"]["device_index"] = default_device
+                print(f"[Audio] Выбран системный микрофон по умолчанию index {default_device}: {devices[default_device]['name']}")
+            else:
+                # Fallback 2: Try first input device
+                first_input = find_first_input_device()
+                if first_input is not None:
+                    self.config["audio"]["device_index"] = first_input
+                    print(f"[Audio] Системный микрофон по умолчанию недоступен. Выбран первый рабочий входной канал index {first_input}: {devices[first_input]['name']}")
+                else:
+                    self.config["audio"]["device_index"] = None
+                    print("[Audio Error] В системе не найдено ни одного устройства ввода звука!", file=sys.stderr)
 
     def setup_gemini(self):
         # API Key can be set in config.json or environment variable
@@ -433,6 +522,8 @@ class TLLVoiceApp:
         try:
             self.recorder.start()
             self.overlay.set_state(STATE_RECORDING, f"mode{mode}")
+            self.overlay.current_radius = 10.0
+            self.overlay.update_vu_indicator(self.recorder)
         except Exception as e:
             print(f"[Error] Ошибка запуска аудио: {e}", file=sys.stderr)
             self.current_mode = None
@@ -454,6 +545,28 @@ class TLLVoiceApp:
             print("[Warning] Запись пуста")
             self.queue.put(("error", "Пустая запись"))
             return
+            
+        # Silence check (preventing keypress click trigger by stripping first/last 150ms)
+        audio_data = getattr(self.recorder, "last_audio_data", None)
+        if audio_data is not None and len(audio_data) > 0:
+            trim_samples = int(0.15 * self.recorder.sample_rate)
+            if len(audio_data) > 2 * trim_samples:
+                check_data = audio_data[trim_samples:-trim_samples]
+            else:
+                check_data = np.array([], dtype=audio_data.dtype)
+                
+            if len(check_data) > 0:
+                rms_trimmed = np.sqrt(np.mean(check_data.astype(np.float32) ** 2))
+            else:
+                rms_trimmed = 0.0
+                
+            threshold = self.config["audio"].get("silence_threshold", 100)
+            print(f"[Silence Check] Trimmed RMS: {rms_trimmed:.2f} (Threshold: {threshold})")
+            
+            if rms_trimmed < threshold:
+                print("[Warning] Обнаружена тишина, отмена отправки.")
+                self.queue.put(("error", "Микрофон молчит!"))
+                return
             
         # Run API call in a separate thread so Tkinter UI is responsive
         threading.Thread(target=self.process_audio, args=(wav_bytes, mode), daemon=True).start()
@@ -616,7 +729,114 @@ class TLLVoiceApp:
             self.hotkey_listener.stop()
         self.queue.put(("exit",))
 
+def run_onboarding(config_path):
+    print("\n=== TLL-Voice: Настройка микрофона / Microphone Setup ===")
+    try:
+        devices = sd.query_devices()
+    except Exception as e:
+        print(f"[Ошибка] Не удалось получить список аудиоустройств: {e}")
+        return False
+
+    input_devices = []
+    for idx, dev in enumerate(devices):
+        if dev.get('max_input_channels', 0) > 0:
+            input_devices.append((idx, dev['name'], dev['hostapi']))
+
+    if not input_devices:
+        print("[Ошибка] Входные аудиоустройства (микрофоны) не найдены в системе!")
+        return False
+
+    print("\nДоступные устройства ввода:")
+    for i, (idx, name, hostapi) in enumerate(input_devices):
+        try:
+            hostapi_name = sd.query_hostapis(hostapi)['name']
+        except Exception:
+            hostapi_name = "Unknown API"
+        print(f"  [{i}] ID {idx}: {name} ({hostapi_name})")
+
+    # Detect default input device
+    default_idx = -1
+    try:
+        default_idx = sd.default.device[0]
+    except Exception:
+        pass
+
+    default_selection = 0
+    for i, (idx, name, hostapi) in enumerate(input_devices):
+        if idx == default_idx:
+            default_selection = i
+            break
+
+    print(f"\nРекомендуемое устройство по умолчанию отмечено как [{default_selection}].")
+
+    while True:
+        try:
+            choice = input(f"Выберите номер микрофона [0-{len(input_devices)-1}] (по умолчанию {default_selection}): ").strip()
+            if not choice:
+                selected_idx = input_devices[default_selection][0]
+                break
+            choice_val = int(choice)
+            if 0 <= choice_val < len(input_devices):
+                selected_idx = input_devices[choice_val][0]
+                break
+            else:
+                print(f"Неверный номер. Пожалуйста, введите число от 0 до {len(input_devices)-1}.")
+        except ValueError:
+            print("Пожалуйста, введите корректное число или просто нажмите Enter для выбора по умолчанию.")
+        except (KeyboardInterrupt, EOFError):
+            print("\nНастройка отменена. Используется значение по умолчанию.")
+            selected_idx = input_devices[default_selection][0]
+            break
+
+    # Load current config, update device_index, and save
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config_data = json.load(f)
+    except Exception:
+        config_data = {}
+
+    if "audio" not in config_data:
+        config_data["audio"] = {}
+    config_data["audio"]["device_index"] = selected_idx
+
+    try:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config_data, f, indent=2, ensure_ascii=False)
+        print(f"\n[Успех] Микрофон (ID {selected_idx}) успешно сохранен в config.json!\n")
+        return True
+    except Exception as e:
+        print(f"[Ошибка] Не удалось сохранить конфигурацию: {e}")
+        return False
+
 if __name__ == "__main__":
+    config_path = os.path.join(os.path.dirname(__file__), "config.json")
+    
+    # Read config to check if setup is needed
+    needs_setup = False
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+            if cfg.get("audio", {}).get("device_index") is None:
+                needs_setup = True
+    except Exception:
+        needs_setup = True
+
+    # Check for command line flags
+    explicit_setup = "--setup" in sys.argv
+    
+    if needs_setup or explicit_setup:
+        # Check if stdin is a TTY
+        is_interactive = sys.stdin and sys.stdin.isatty()
+        if is_interactive:
+            run_onboarding(config_path)
+        else:
+            if explicit_setup:
+                print("Error: --setup requires an interactive terminal.", file=sys.stderr)
+                sys.exit(1)
+            else:
+                # Silently log/warn and use defaults since we have no TTY
+                print("[Warning] No interactive terminal detected for first-time onboarding. Using system defaults.", file=sys.stderr)
+
     # Hide command window in background on startup if run via pythonw
     root = tk.Tk()
     app = TLLVoiceApp(root)
