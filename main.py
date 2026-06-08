@@ -18,7 +18,8 @@ from tkinter import ttk
 import numpy as np
 import sounddevice as sd
 import pyperclip
-import keyboard
+from pynput import keyboard as pynput_kb
+from pynput.keyboard import GlobalHotKeys, Controller as KbController, Key
 import pystray
 from PIL import Image, ImageDraw
 import google.generativeai as genai
@@ -317,23 +318,45 @@ class TLLVoiceApp:
             self.gemini_configured = False
             print("[Warning] API ключ Gemini не задан. Укажите его в config.json или переменной GEMINI_API_KEY", file=sys.stderr)
 
+    @staticmethod
+    def _to_pynput_hotkey(hotkey_str):
+        """Convert 'alt+caps lock' style string to pynput '<alt>+<caps_lock>' format."""
+        mapping = {
+            'alt': '<alt>', 'ctrl': '<ctrl>', 'shift': '<shift>',
+            'cmd': '<cmd>', 'caps lock': '<caps_lock>', 'caps_lock': '<caps_lock>',
+            'enter': '<enter>', 'space': '<space>', 'tab': '<tab>',
+            'esc': '<esc>', 'delete': '<delete>', 'backspace': '<backspace>',
+            'f1': '<f1>', 'f2': '<f2>', 'f3': '<f3>', 'f4': '<f4>',
+            'f5': '<f5>', 'f6': '<f6>', 'f7': '<f7>', 'f8': '<f8>',
+            'f9': '<f9>', 'f10': '<f10>', 'f11': '<f11>', 'f12': '<f12>',
+        }
+        # Split by '+' but preserve 'caps lock' (two words)
+        raw = hotkey_str.strip().lower()
+        # Normalize 'caps lock' before splitting
+        raw = raw.replace('caps lock', 'caps_lock')
+        parts = [p.strip() for p in raw.split('+')]
+        converted = [mapping.get(p, p if len(p) == 1 else f'<{p}>') for p in parts]
+        return '+'.join(converted)
+
     def bind_hotkeys(self):
-        # Keyboard library requires admin permissions on Windows 11
         hotkey_m1 = str(self.config["hotkeys"].get("mode1", "alt+caps lock")).strip().lower()
         hotkey_m2 = str(self.config["hotkeys"].get("mode2", "ctrl+caps lock")).strip().lower()
         hotkey_m3 = str(self.config["hotkeys"].get("mode3", "ctrl+shift+caps lock")).strip().lower()
-        
+
         try:
-            keyboard.add_hotkey(hotkey_m1, lambda: self.queue.put(("hotkey", 1)), suppress=True)
-            keyboard.add_hotkey(hotkey_m2, lambda: self.queue.put(("hotkey", 2)), suppress=True)
-            keyboard.add_hotkey(hotkey_m3, lambda: self.queue.put(("hotkey", 3)), suppress=True)
+            hotkeys = {
+                self._to_pynput_hotkey(hotkey_m1): lambda: self.queue.put(("hotkey", 1)),
+                self._to_pynput_hotkey(hotkey_m2): lambda: self.queue.put(("hotkey", 2)),
+                self._to_pynput_hotkey(hotkey_m3): lambda: self.queue.put(("hotkey", 3)),
+            }
+            self.hotkey_listener = GlobalHotKeys(hotkeys)
+            self.hotkey_listener.start()
             print(f"[Hotkeys] Зарегистрирован Mode 1: {hotkey_m1}")
             print(f"[Hotkeys] Зарегистрирован Mode 2: {hotkey_m2}")
             print(f"[Hotkeys] Зарегистрирован Mode 3: {hotkey_m3}")
         except Exception as e:
-            print(f"[Error] Не удалось привязать хоткеи: {e}. Требуются права Администратора!", file=sys.stderr)
-            # Schedule error overlay after UI loads
-            self.root.after(500, lambda: self.queue.put(("error", "Требуются права Администратора!")))
+            print(f"[Error] Не удалось привязать хоткеи: {e}", file=sys.stderr)
+            self.root.after(500, lambda: self.queue.put(("error", "Ошибка хоткеев!")))
 
     def setup_tray(self):
         # Create a simple icon
@@ -468,7 +491,9 @@ class TLLVoiceApp:
                 time.sleep(0.15)
                 
                 # Paste
-                keyboard.send('ctrl+v')
+                _kbc = KbController()
+                with _kbc.pressed(Key.ctrl):
+                    _kbc.tap('v')
                 self.queue.put(("done",))
             else:
                 self.queue.put(("error", "Пустой ответ API"))
@@ -587,7 +612,8 @@ class TLLVoiceApp:
         sd.stop()
         if self.tray_icon:
             self.tray_icon.stop()
-        keyboard.unhook_all()
+        if hasattr(self, 'hotkey_listener'):
+            self.hotkey_listener.stop()
         self.queue.put(("exit",))
 
 if __name__ == "__main__":
