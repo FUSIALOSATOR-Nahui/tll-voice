@@ -8,6 +8,7 @@ import os
 import sys
 import json
 import sounddevice as sd
+from dotenv import load_dotenv
 
 _DEFAULT_CONFIG = {
     "api_key": "YOUR_GEMINI_API_KEY",
@@ -40,6 +41,13 @@ def _config_path(path=None):
 
 def load_config(path=None):
     """Load config.json; fall back to defaults on any error."""
+    # Load .env first so os.environ.get() works everywhere (Windows + Linux).
+    # override=False: system env vars take priority over .env file.
+    _env_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"
+    )
+    load_dotenv(dotenv_path=_env_path, override=False)
+
     fpath = _config_path(path)
     try:
         with open(fpath, "r", encoding="utf-8") as f:
