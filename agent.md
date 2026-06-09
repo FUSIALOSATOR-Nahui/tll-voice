@@ -1,81 +1,137 @@
 # Системные инструкции для разработки TLL-Voice
 
-Этот документ описывает технологический стек, архитектурные правила и стандарты качества для инкрементального развития MVP проекта TLL-Voice. Все будущие ИИ-агенты обязаны строго придерживаться этих инструкций.
+Этот документ описывает технологический стек, архитектурные правила и стандарты качества для инкрементального развития TLL-Voice v0.4. Все будущие ИИ-агенты обязаны строго придерживаться этих инструкций.
 
 ---
 
 ## 1. Концепция проекта
-**TLL-Voice** — это фоновое утилитарное Windows/Linux-приложение на Python для голосового ввода с мгновенным форматированием через API Gemini. Упор делается на **максимальную асимметрию усилий**, сверхмалое потребление ОЗУ, отсутствие лишнего визуального мусора и высокую отзывчивость (latency).
+**TLL-Voice** — фоновое утилитарное Windows/Linux-приложение на Python для голосового ввода с мгновенным форматированием через API Gemini. Упор делается на **максимальную асимметрию усилий**, минимальное потребление ОЗУ и высокую отзывчивость (latency).
 
 ---
 
-## 2. Технологический стек и окружение
+## 2. Архитектура (v0.4 — Layered Core/Platform)
+
+Проект разделён на три изолированных слоя:
+
+```
+TLL-Voice/
+├── main.py                   # Bootstrapper (~35 строк). Определяет ОС, инжектирует адаптер.
+├── core/                     # Ядро — инвариантно к ОС. ЗАПРЕЩЕНЫ keyboard/pynput/platform.system()
+│   ├── state.py              # Константы состояний
+│   ├── config.py             # load_config / save_config / run_onboarding_if_needed
+│   ├── audio.py              # AudioRecorder (sounddevice, in-memory WAV)
+│   ├── gemini.py             # GeminiClient (transcribe / synthesize)
+│   ├── engine.py             # TLLVoiceEngine — главный оркестратор, получает адаптер через DI
+│   └── gui/
+│       ├── overlay.py        # Tkinter borderless overlay
+│       └── tray.py           # pystray системный трей
+└── platforms/                # Периферия — адаптеры ОС. Не знают друг о друге.
+    ├── base.py               # PlatformAdapter (ABC): register_hotkeys / inject_text / cleanup
+    ├── windows.py            # WindowsAdapter — использует ТОЛЬКО библиотеку `keyboard`
+    └── linux.py              # LinuxAdapter — использует ТОЛЬКО `pynput`
+```
+
+### Инварианты (нарушать ЗАПРЕЩЕНО)
+
+| Правило | Где проверять |
+|---|---|
+| `core/` не содержит `import keyboard`, `import pynput`, `platform.system()` | `Select-String -Path "core\*.py","core\gui\*.py" -Pattern "platform\.system\|import keyboard\|import pynput"` → только комментарии |
+| `platforms/windows.py` использует ТОЛЬКО `keyboard`, не `pynput` | Grep windows.py |
+| `platforms/linux.py` использует ТОЛЬКО `pynput`, не `keyboard` | Grep linux.py |
+| Адаптеры не импортируют друг друга | windows.py не знает о linux.py и наоборот |
+| `inject_text()` имеет `time.sleep(0.05)` до `Ctrl+V` | Оба адаптера |
+
+---
+
+## 3. Контракт взаимодействия (Dependency Injection)
+
+```python
+# Паттерн DI в main.py:
+if platform.system() == "Windows":
+    from platforms.windows import WindowsAdapter as _Adapter
+else:
+    from platforms.linux import LinuxAdapter as _Adapter
+
+TLLVoiceEngine(root, config, adapter=_Adapter())
+```
+
+`TLLVoiceEngine` принимает `PlatformAdapter` и вызывает:
+- `adapter.register_hotkeys({"alt+caps lock": cb1, "ctrl+caps lock": cb2, ...})`
+- `adapter.inject_text(text)` — вставка результата в активное окно
+- `adapter.cleanup()` — при выходе
+
+---
+
+## 4. Технологический стек
+
 - **Язык**: Python 3.10+
-- **Изоляция**: Локальное виртуальное окружение `.venv/` в корне проекта.
-- **Ключевые зависимости (requirements.txt)**:
-  - `google-generativeai` — SDK для взаимодействия с Gemini API.
-  - `sounddevice` + `numpy` — захват звука в реальном времени с низким latency.
-  - `keyboard` — глобальный перехват хоткеев (для Windows, требует прав администратора).
-  - `pynput` — глобальный перехват хоткеев (для Linux).
-  - `pyperclip` — работа с системным буфером обмена.
-  - `pystray` + `pillow` — иконка в системном трее.
-  - `tkinter` (встроенная библиотека) — легковесный безрамочный overlay GUI.
+- **Изоляция**: `.venv/` в корне проекта
+- **Ключевые зависимости** (`requirements.txt`):
+  - `google-generativeai` — SDK Gemini API
+  - `sounddevice` + `numpy` — захват аудио (кроссплатформенно)
+  - `keyboard>=0.13.5` — глобальные хоткеи **только для Windows** (требует прав Admin)
+  - `pynput>=1.7.6` — глобальные хоткеи **только для Linux** + вставка текста
+  - `pyperclip` — буфер обмена
+  - `pystray` + `pillow` — системный трей
+  - `tkinter` — оверлей GUI (только main thread!)
 
 ---
 
-## 3. Архитектурные правила и паттерны
-Любые доработки кода в [main.py](file:///home/dede/00_project/tll-voice/main.py) (Windows-путь: [main.py](file:///c:/Users/dede/00_project/TLL-Voice/main.py)) должны следовать следующим правилам:
+## 5. Правила многопоточности
 
-### А. Многопоточность (Threading & Queue)
-1. **Tkinter GUI должен всегда работать в основном потоке (Main Thread)**.
-2. API-запросы к Gemini и запись звука должны осуществляться **строго в фоновых потоках (daemon threads)**, чтобы избежать фризов оверлея.
-3. Любое взаимодействие между клавиатурными хуками, фоновым API и GUI должно происходить потокобезопасно через единую очередь событий `queue.Queue`. GUI опрашивает очередь по таймеру `.after()`.
-
-### Б. Работа без временных файлов (In-Memory Processing)
-- Запись аудиопотока должна формироваться непосредственно в памяти в байтовом буфере `io.BytesIO`.
-- Аудио передается в Gemini SDK напрямую через структуру `inline_data` с типом `mime_type: "audio/wav"`. **Никаких промежуточных сохранений файлов на диск.**
-
-### В. Безопасность при работе в фоне (pythonw.exe)
-- Приложение запускается без консоли с помощью `pythonw.exe` (в Windows). В этом режиме стандартные дескрипторы `sys.stdout` и `sys.stderr` равны `None`.
-- На самом верху входной точки скрипта обязательно должна стоять проверка и перенаправление потоков:
-  ```python
-  if sys.stdout is None:
-      sys.stdout = open(os.devnull, "w")
-  if sys.stderr is None:
-      sys.stderr = open(os.devnull, "w")
-  ```
-  Это предотвращает падения скрипта при вызове любых функций `print()` в оконном режиме.
-
-### Г. Полномочия и права запуска
-- Для корректного глобального перехвата клавиш библиотека `keyboard` требует прав Администратора на Windows.
-- Запуск приложения всегда производится через [run_tll_voice.bat](file:///c:/Users/dede/00_project/TLL-Voice/run_tll_voice.bat) (на Windows, который автоматически запрашивает UAC-повышение) или через [run.sh](file:///home/dede/00_project/tll-voice/run.sh) (на Linux).
-
-### Д. Протокол валидации изменений
-Перед передачей готового кода пользователю:
-1. Запустить проверку синтаксиса: `.venv\Scripts\python.exe -m py_compile main.py` (Windows) или `python3 -m py_compile main.py` (Linux).
-2. Убедиться, что новые зависимости задокументированы в `requirements.txt`.
-3. Оверлей должен сохранять плавность анимации и скрываться автоматически при завершении (`DONE` через 0.8с, `ERROR` через 2.5с).
+1. Tkinter GUI **всегда** в главном потоке (Main Thread)
+2. API-запросы и запись звука — в daemon threads
+3. Все взаимодействия через `queue.Queue`, GUI опрашивает через `.after(50, poll_queue)`
 
 ---
 
-## 4. Правила изменения промптов и конфигурации
-- Конфигурация приложения хранится строго в [config.json](file:///home/dede/00_project/tll-voice/config.json) (Windows-путь: [config.json](file:///c:/Users/dede/00_project/TLL-Voice/config.json)).
-- Режим 1 (Smart Editor): Должен использовать **пассивный системный промпт** (ИИ не должен отвечать на вопросы пользователя, выполнять команды, писать код или вступать в диалог; его цель — просто транскрибировать и редактировать речь в чистый текст).
-- Режим 2 (Literal): Буквальная транскрипция, исправляющая только базовую пунктуацию для читаемости.
+## 6. Безопасность запуска (Windows)
+
+- `pythonw.exe` запускается **только после** валидации `config.json`
+- `run_tll_voice.bat` выполняет пре-флай проверку:
+  1. UAC-повышение прав
+  2. Проверка `config.json` через `python.exe`
+  3. Если конфиг неполный → `python.exe main.py --setup` (интерактивный мастер)
+  4. Только при валидном конфиге → `pythonw.exe main.py` (фон, без консоли)
+- Первые строки `main.py` перенаправляют `stdout/stderr` в `os.devnull` если они `None`
 
 ---
 
-## 5. Дельта изменений
-- Реализован интерактивный консольный мастер настройки микрофона (`run_onboarding` с аргументом `--setup`) для выбора активного устройства ввода.
-- Добавлена функция детекции тишины перед отправкой аудиозапроса (обрезка 150 мс по краям и проверка RMS по порогу `silence_threshold` в `config.json`).
-- Скрипт `run.sh` обновлен для проброса всех аргументов командной строки в `main.py`.
-- Глобальные настройки Git (`user.name` и `user.email`) на текущей машине сконфигурированы для пользователя `FUSIALOSATOR-Nahui`.
-- Все последние изменения успешно сохранены в Git-репозитории и отправлены (push) на GitHub через SSH.
+## 7. Протокол валидации изменений
+
+```powershell
+# 1. Синтаксис всех модулей
+$files = @("main.py","core\__init__.py","core\state.py","core\config.py","core\audio.py","core\gemini.py","core\engine.py","core\gui\__init__.py","core\gui\overlay.py","core\gui\tray.py","platforms\__init__.py","platforms\base.py","platforms\windows.py","platforms\linux.py")
+foreach($f in $files){ .venv\Scripts\python.exe -m py_compile $f }
+
+# 2. Инвариант изоляции ядра (допустимы только комментарии)
+Select-String -Path "core\*.py","core\gui\*.py" -Pattern "platform\.system|import keyboard|from keyboard|import pynput|from pynput"
+```
 
 ---
 
-## 6. Бэклог задач
-- Протестировать работу глобальных хоткеев через `pynput` в различных графических окружениях Linux (X11 / Wayland).
-- Реализовать обработку сетевых ошибок и тайм-аутов при запросах к Gemini API с отображением статуса в GUI-оверлее.
-- Оптимизировать порог чувствительности детектора тишины (`silence_threshold`) на основе реальных шумовых характеристик микрофонов пользователей.
-- Добавить автоматическое создание/восстановление дефолтного файла `config.json`, если он отсутствует.
+## 8. Правила конфигурации
+
+- Конфиг строго в `config.json` в корне проекта
+- `core/config.py::load_config()` — единственная точка чтения
+- `core/config.py::save_config()` — атомарная запись через `.tmp`-файл
+
+---
+
+## 9. Дельта изменений (v0.4)
+
+- **Архитектурный рефакторинг**: монолит `main.py` (844 строки) разбит на `core/` + `platforms/` + bootstrapper (~35 строк)
+- **`platforms/windows.py`**: переписан на библиотеку `keyboard` (не pynput) — устранено залипание CapsLock при Alt+CapsLock
+- **`platforms/linux.py`**: использует `pynput` (GlobalHotKeys)
+- **Онбординг**: инкапсулирован в `core/config.py`, `run_tll_voice.bat` делает пре-флай проверку
+- **`inject_text()`**: гарантированный `time.sleep(0.05)` в обоих адаптерах
+
+---
+
+## 10. Бэклог задач
+
+- Написать unit-тесты для `core/config.py` (load/save/onboarding edge cases)
+- Реализовать обработку сетевых ошибок с timeout и retry в `core/gemini.py`
+- Протестировать `platforms/linux.py` на Wayland (текущая реализация — X11 only)
+- Добавить автосоздание дефолтного `config.json` при отсутствии файла
+- Оптимизировать `silence_threshold` на реальных микрофонных данных
