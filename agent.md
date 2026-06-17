@@ -120,7 +120,7 @@ Select-String -Path "core\*.py","core\gui\*.py" -Pattern "platform\.system|impor
 
 ## 9. Дельта изменений (v0.4)
 
-- **Архитектурный рефакторинг**: монолит `main.py` (844 строки) разбит на `core/` + `platforms/` + bootstrapper (~35 строк)
+- **Архитектурный рефакторинг**: монолит `main.py` (~<844 строки) разбит на `core/` + `platforms/` + bootstrapper (~35 строк)
 - **`platforms/windows.py`**: переписан на библиотеку `keyboard` (не pynput) — устранено залипание CapsLock при Alt+CapsLock
 - **`platforms/linux.py`**: использует `pynput` (GlobalHotKeys)
 - **Онбординг**: инкапсулирован в `core/config.py`, `run_tll_voice.bat` делает пре-флай проверку
@@ -128,10 +128,5 @@ Select-String -Path "core\*.py","core\gui\*.py" -Pattern "platform\.system|impor
 
 ---
 
-## 10. Бэклог задач
-
-- Написать unit-тесты для `core/config.py` (load/save/onboarding edge cases)
-- Реализовать обработку сетевых ошибок с timeout и retry в `core/gemini.py`
-- Протестировать `platforms/linux.py` на Wayland (текущая реализация — X11 only)
-- Добавить автосоздание дефолтного `config.json` при отсутствии файла
-- Оптимизировать `silence_threshold` на реальных микрофонных данных
+## 10. Бэклог задач инкрементального расширения проекта 
+**Только если Автор явно попросил перейти на "Бэклог задач", то: смотри [.agent/backlog_list.md](file://C:/Users/dede/.agent/backlog_list.md)**
