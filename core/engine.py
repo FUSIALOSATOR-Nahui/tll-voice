@@ -273,7 +273,8 @@ class TLLVoiceEngine:
         try:
             model = self.config.get("model", "gemini-2.0-flash")
             temp = float(self.config.get("temperature", 0.3))
-            prompt = self.config["prompts"][f"mode{mode}"]
+            from core.config import load_prompt_by_mode
+            prompt = load_prompt_by_mode(f"mode{mode}")
 
             text = self.gemini.transcribe(wav_bytes, prompt, model, temp)
             print(f"[API] Response: {text}")
@@ -316,7 +317,8 @@ class TLLVoiceEngine:
             return
         try:
             tts_model = self.config.get("tts_model", "gemini-2.5-flash-preview-tts")
-            sys_prompt = self.config["prompts"].get("mode3", "")
+            from core.config import load_prompt_by_mode
+            sys_prompt = load_prompt_by_mode("mode3")
             pace = self.config.get("tts_pace", "1.75")
 
             audio_bytes = self.gemini.synthesize(text, tts_model, sys_prompt, pace)

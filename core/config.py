@@ -7,12 +7,19 @@ INVARIANT: No imports of keyboard, pynput, or platform.system().
 import os
 import sys
 import json
+from pathlib import Path
 import sounddevice as sd
 from dotenv import load_dotenv
 
+_DEFAULT_PROMPTS = {
+    "mode1": "Ты — высокоточный ИИ-редактор устной речи. Исправляй грамматику и запинки, сохраняя 100% смысла.",
+    "mode2": "Ты — инструмент буквальной транскрипции (Audio-to-Text). Расставь только точки и запятые для читаемости.",
+    "mode3": "Ты — профессиональный диктор. Озвучь предоставленный текст."
+}
+
 _DEFAULT_CONFIG = {
     "api_key": "YOUR_GEMINI_API_KEY",
-    "model": "gemini-2.0-flash",
+    "model": "gemini-3.1-flash-lite",
     "tts_model": "gemini-2.5-flash-preview-tts",
     "tts_pace": "1.75",
     "temperature": 0.3,
@@ -21,7 +28,7 @@ _DEFAULT_CONFIG = {
         "mode2": "ctrl+caps lock",
         "mode3": "ctrl+shift+caps lock",
     },
-    "prompts": {"mode1": "", "mode2": "", "mode3": ""},
+    "modes": ["mode1", "mode2", "mode3"],
     "audio": {
         "sample_rate": 16000,
         "channels": 1,
@@ -40,22 +47,92 @@ def _config_path(path=None):
 
 
 def load_config(path=None):
-    """Load config.json; fall back to defaults on any error."""
+    """Load config.json; raise error on bad JSON or return config."""
     # Load .env first so os.environ.get() works everywhere (Windows + Linux).
     # override=False: system env vars take priority over .env file.
-    _env_path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"
-    )
-    load_dotenv(dotenv_path=_env_path, override=False)
+    project_root = Path(__file__).resolve().parent.parent
+    _env_path = project_root / ".env"
+    if _env_path.exists():
+        load_dotenv(dotenv_path=str(_env_path), override=False)
 
     fpath = _config_path(path)
-    try:
-        with open(fpath, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"[Config] Error loading config.json: {e}", file=sys.stderr)
+    if not os.path.exists(fpath):
         import copy
-        return copy.deepcopy(_DEFAULT_CONFIG)
+        cfg = copy.deepcopy(_DEFAULT_CONFIG)
+    else:
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except json.JSONDecodeError as jde:
+            print("\n" + "="*60, file=sys.stderr)
+            print(f"[FATAL] JSON Syntax Error in config.json at line {jde.lineno}, column {jde.colno}:", file=sys.stderr)
+            print(f"  {jde.msg}", file=sys.stderr)
+            print("Please fix the syntax error (check commas, quotes, and braces).", file=sys.stderr)
+            print("="*60 + "\n", file=sys.stderr)
+            sys.exit(1)
+        except Exception as e:
+            print(f"[Config] Ошибка чтения config.json: {e}", file=sys.stderr)
+            import copy
+            cfg = copy.deepcopy(_DEFAULT_CONFIG)
+
+    # Pre-flight check and prompt files auto-creation/verification
+    prompts_dir = project_root / "prompts"
+    if not prompts_dir.exists():
+        try:
+            prompts_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as err:
+            print(f"[Config] Не удалось создать папку prompts/: {err}", file=sys.stderr)
+
+    modes = cfg.get("modes", ["mode1", "mode2", "mode3"])
+    for m in modes:
+        pfile = prompts_dir / f"{m}.md"
+        if not pfile.exists():
+            try:
+                content = ""
+                if m == "mode1":
+                    sys_prompt_path = project_root / "system-promt.md"
+                    if sys_prompt_path.exists():
+                        content = sys_prompt_path.read_text(encoding="utf-8")
+                if not content:
+                    content = _DEFAULT_PROMPTS.get(m, "")
+                pfile.write_text(content, encoding="utf-8")
+            except Exception as write_err:
+                print(f"[Config] Ошибка записи промпта по умолчанию для {m}: {write_err}", file=sys.stderr)
+        else:
+            # Pre-flight readability verification
+            try:
+                pfile.read_text(encoding="utf-8")
+            except Exception as read_err:
+                print("\n" + "="*60, file=sys.stderr)
+                print(f"[FATAL] Ошибка доступа к файлу промпта {pfile}: {read_err}", file=sys.stderr)
+                print("Убедитесь, что у процесса есть права на чтение файлов в папке prompts/.", file=sys.stderr)
+                print("="*60 + "\n", file=sys.stderr)
+                sys.exit(1)
+
+    return cfg
+
+
+def load_prompt_by_mode(mode: str) -> str:
+    """
+    Load and return prompt content from prompts/{mode}.md.
+    If file is empty or missing, returns safe fallback.
+    """
+    project_root = Path(__file__).resolve().parent.parent
+    filepath = project_root / "prompts" / f"{mode}.md"
+    try:
+        if filepath.exists():
+            content = filepath.read_text(encoding="utf-8").strip()
+            if content:
+                return content
+    except Exception as e:
+        print(f"[Config] Ошибка при чтении файла промпта {filepath}: {e}", file=sys.stderr)
+
+    fallbacks = {
+        "mode1": "Ты — голосовой ассистент, переведи аудио в текст без изменений.",
+        "mode2": "Ты — инструмент буквальной транскрипции (Audio-to-Text). Выдавай чистый транскрибированный текст.",
+        "mode3": "Ты — профессиональный диктор. Озвучь предоставленный текст."
+    }
+    return fallbacks.get(mode, "Ты — голосовой ассистент, переведи аудио в текст без изменений.")
 
 
 def save_config(config, path=None):
