@@ -10,7 +10,7 @@
 
 ---
 
-## 2. Архитектура (v0.4 — Layered Core/Platform)
+## 2. Архитектура (v0.5 — Layered Core/Platform)
 
 Проект разделён на три изолированных слоя:
 
@@ -125,7 +125,7 @@ Select-String -Path "core\*.py","core\gui\*.py" -Pattern "platform\.system|impor
 
 ---
 
-## 9. Дельта изменений (v0.4)
+## 9. Дельта изменений (v0.5)
 
 **Только если Аторо явно указал перейти на "Дельту изменений", то смотри [delta.md](.agent/delta.md)**
 
