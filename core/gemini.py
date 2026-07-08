@@ -9,7 +9,8 @@ import io
 import wave
 
 import numpy as np
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 
 class GeminiClient:
@@ -20,7 +21,7 @@ class GeminiClient:
     """
 
     def __init__(self):
-        self._configured = False
+        self.client: genai.Client | None = None
 
     def configure(self, api_key: str) -> bool:
         """
@@ -32,15 +33,14 @@ class GeminiClient:
                 "[Gemini] API key not set. Provide it in config.json or GEMINI_API_KEY env var.",
                 file=sys.stderr,
             )
-            self._configured = False
+            self.client = None
             return False
-        genai.configure(api_key=api_key)
-        self._configured = True
+        self.client = genai.Client(api_key=api_key)
         return True
 
     @property
     def is_configured(self) -> bool:
-        return self._configured
+        return self.client is not None
 
     def transcribe(
         self,
@@ -53,15 +53,25 @@ class GeminiClient:
         Send WAV audio + text prompt to Gemini; return transcribed/edited text.
         Raises RuntimeError if not configured.
         """
-        if not self._configured:
+        if not self.client:
             raise RuntimeError("Gemini API key not configured.")
 
-        audio_part = {"mime_type": "audio/wav", "data": wav_bytes}
-        model = genai.GenerativeModel(model_name=model_name)
-        response = model.generate_content(
-            contents=[audio_part, prompt],
-            generation_config=genai.GenerationConfig(temperature=temperature),
+        audio_part = types.Part.from_bytes(data=wav_bytes, mime_type="audio/wav")
+        
+        # Explicitly configure thinking_budget = 0 to completely disable step-by-step thinking
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            thinking_config=types.ThinkingConfig(thinking_budget=0)
         )
+        
+        response = self.client.models.generate_content(
+            model=model_name,
+            contents=[audio_part, prompt],
+            config=config,
+        )
+        
+        if not response or not response.text:
+            return ""
         return response.text.strip()
 
     def synthesize(
@@ -76,7 +86,7 @@ class GeminiClient:
         Returns raw audio bytes or None if no audio in response.
         Raises RuntimeError if not configured.
         """
-        if not self._configured:
+        if not self.client:
             raise RuntimeError("Gemini API key not configured.")
 
         # Apply pace tag
@@ -86,23 +96,25 @@ class GeminiClient:
         except ValueError:
             text_to_speak = f"[{pace}] {text}" if pace in ("fast", "slow") else text
 
-        model = genai.GenerativeModel(
-            model_name=tts_model,
+        config = types.GenerateContentConfig(
+            response_modalities=["AUDIO"],
+            max_output_tokens=8192,
             system_instruction=system_prompt or None,
         )
-        response = model.generate_content(
-            text_to_speak,
-            generation_config=genai.protos.GenerationConfig(
-                response_modalities=["AUDIO"],
-                max_output_tokens=8192,
-            ),
+        
+        response = self.client.models.generate_content(
+            model=tts_model,
+            contents=text_to_speak,
+            config=config,
         )
 
-        for candidate in response.candidates:
-            for part in candidate.content.parts:
-                inline_data = getattr(part, "inline_data", None)
-                if inline_data and "audio" in inline_data.mime_type:
-                    return inline_data.data
+        if response and response.candidates:
+            for candidate in response.candidates:
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        inline_data = getattr(part, "inline_data", None)
+                        if inline_data and inline_data.mime_type and "audio" in inline_data.mime_type:
+                            return inline_data.data
         return None
 
     @staticmethod
