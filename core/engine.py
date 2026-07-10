@@ -37,6 +37,18 @@ from core.gui.overlay import Overlay
 from core.gui.tray import TrayIcon
 
 
+def _log_debug(message: str) -> None:
+    try:
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        log_path = os.path.join(project_root, "tll_voice.log")
+        from datetime import datetime
+        time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{time_str}] {message}\n")
+    except Exception:
+        pass
+
+
 class TLLVoiceEngine:
     """
     Main application engine. Wires audio, Gemini API, GUI, and the platform
@@ -267,25 +279,41 @@ class TLLVoiceEngine:
         ).start()
 
     def _process_audio(self, wav_bytes: bytes, mode: int) -> None:
+        _log_debug(f"[Audio] Start processing mode {mode}. Wav size: {len(wav_bytes)}")
         if not self.gemini.is_configured:
+            _log_debug("[Audio] Error: Gemini is not configured")
             self.queue.put(("error", "Не настроен API Ключ!"))
             return
         try:
             model = self.config.get("model", "gemini-2.0-flash")
             temp = float(self.config.get("temperature", 0.3))
             from core.config import load_prompt_by_mode
-            prompt = load_prompt_by_mode(f"mode{mode}")
+            _log_debug("[Audio] Loading prompt...")
+            system_instr, user_prompt = load_prompt_by_mode(f"mode{mode}")
+            _log_debug(f"[Audio] Loaded prompt. Sys instruction length: {len(system_instr)}, User prompt present: {user_prompt is not None}")
 
-            text = self.gemini.transcribe(wav_bytes, prompt, model, temp)
+            _log_debug(f"[Audio] Invoking transcribe with model {model}...")
+            text = self.gemini.transcribe(
+                wav_bytes=wav_bytes,
+                system_instruction=system_instr,
+                prompt=user_prompt,
+                model_name=model,
+                temperature=temp
+            )
+            _log_debug(f"[Audio] Transcribe completed. Response length: {len(text) if text else 0}")
             print(f"[API] Response: {text}")
 
             if text:
                 # Delegate platform-specific text injection to the adapter
+                _log_debug(f"[Audio] Injecting text: {text[:30]}...")
                 self.adapter.inject_text(text)
+                _log_debug("[Audio] Text injection completed.")
                 self.queue.put(("done",))
             else:
+                _log_debug("[Audio] Empty response from API")
                 self.queue.put(("error", "Пустой ответ API"))
         except Exception as e:
+            _log_debug(f"[Audio] Exception during processing: {e}")
             print(f"[API] Error: {e}", file=sys.stderr)
             self.queue.put(("error", f"API Ошибка: {e}"))
 
@@ -318,7 +346,7 @@ class TLLVoiceEngine:
         try:
             tts_model = self.config.get("tts_model", "gemini-2.5-flash-preview-tts")
             from core.config import load_prompt_by_mode
-            sys_prompt = load_prompt_by_mode("mode3")
+            sys_prompt, _ = load_prompt_by_mode("mode3")
             pace = self.config.get("tts_pace", "1.75")
 
             audio_bytes = self.gemini.synthesize(text, tts_model, sys_prompt, pace)

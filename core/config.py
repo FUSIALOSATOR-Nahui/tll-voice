@@ -112,10 +112,11 @@ def load_config(path=None):
     return cfg
 
 
-def load_prompt_by_mode(mode: str) -> str:
+def load_prompt_by_mode(mode: str) -> tuple[str, str | None]:
     """
     Load and return prompt content from prompts/{mode}.md.
     If file is empty or missing, returns safe fallback.
+    Returns: (system_instruction, user_prompt)
     """
     project_root = Path(__file__).resolve().parent.parent
     filepath = project_root / "prompts" / f"{mode}.md"
@@ -123,7 +124,12 @@ def load_prompt_by_mode(mode: str) -> str:
         if filepath.exists():
             content = filepath.read_text(encoding="utf-8").strip()
             if content:
-                return content
+                if "===" in content:
+                    parts = content.split("===", 1)
+                    sys_inst = parts[0].strip()
+                    usr_pr = parts[1].strip()
+                    return sys_inst, (usr_pr if usr_pr else None)
+                return content, None
     except Exception as e:
         print(f"[Config] Ошибка при чтении файла промпта {filepath}: {e}", file=sys.stderr)
 
@@ -132,7 +138,7 @@ def load_prompt_by_mode(mode: str) -> str:
         "mode2": "Ты — инструмент буквальной транскрипции (Audio-to-Text). Выдавай чистый транскрибированный текст.",
         "mode3": "Ты — профессиональный диктор. Озвучь предоставленный текст."
     }
-    return fallbacks.get(mode, "Ты — голосовой ассистент, переведи аудио в текст без изменений.")
+    return fallbacks.get(mode, "Ты — голосовой ассистент, переведи аудио в текст без изменений."), None
 
 
 def save_config(config, path=None):
