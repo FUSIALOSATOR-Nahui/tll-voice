@@ -12,7 +12,6 @@ from core.state import (
     STATE_PROCESSING,
     STATE_DONE,
     STATE_ERROR,
-    STATE_SYNTHESIS,
 )
 
 
@@ -122,12 +121,6 @@ class Overlay:
             self.label_status.configure(text=short)
             self.canvas.itemconfigure(self.indicator, fill=self.ACCENT_RED)
 
-        elif state == STATE_SYNTHESIS:
-            self.label_title.configure(text="СИНТЕЗ РЕЧИ", fg=self.ACCENT_PURPLE)
-            self.label_status.configure(text="Генерация аудио...")
-            self.canvas.itemconfigure(self.indicator, fill=self.ACCENT_PURPLE)
-            self._animate_dots("Генерация аудио")
-
     # ------------------------------------------------------------------
     # VU Meter animation (called from engine via root.after)
     # ------------------------------------------------------------------
@@ -192,7 +185,7 @@ class Overlay:
             self._fade_id = None
 
     def _animate_dots(self, base_text: str) -> None:
-        if self.current_state not in (STATE_PROCESSING, STATE_SYNTHESIS):
+        if self.current_state != STATE_PROCESSING:
             return
         self.dot_count = (self.dot_count + 1) % 4
         self.label_status.configure(text=base_text + "." * self.dot_count)

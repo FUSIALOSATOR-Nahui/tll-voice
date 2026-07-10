@@ -1,18 +1,14 @@
 {
   "api_key": "YOUR_GEMINI_API_KEY",
   "model": "gemini-3.1-flash-lite",
-  "tts_model": "gemini-3.1-flash-lite",
-  "tts_pace": "1.75",
   "temperature": 0.3,
   "hotkeys": {
     "mode1": "alt+caps lock",
-    "mode2": "ctrl+caps lock",
-    "mode3": "ctrl+shift+caps lock"
+    "mode2": "ctrl+caps lock"
   },
   "modes": [
     "mode1",
-    "mode2",
-    "mode3"
+    "mode2"
   ],
   "audio": {
     "sample_rate": 16000,

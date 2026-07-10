@@ -29,7 +29,6 @@ from core.state import (
     STATE_PROCESSING,
     STATE_DONE,
     STATE_ERROR,
-    STATE_SYNTHESIS,
 )
 from core.audio import AudioRecorder
 from core.gemini import GeminiClient
@@ -161,12 +160,10 @@ class TLLVoiceEngine:
         hk = self.config.get("hotkeys", {})
         m1 = str(hk.get("mode1", "alt+caps lock")).strip().lower()
         m2 = str(hk.get("mode2", "ctrl+caps lock")).strip().lower()
-        m3 = str(hk.get("mode3", "ctrl+shift+caps lock")).strip().lower()
 
         bindings = {
             m1: lambda: self.queue.put(("hotkey", 1)),
             m2: lambda: self.queue.put(("hotkey", 2)),
-            m3: lambda: self.queue.put(("hotkey", 3)),
         }
         try:
             self.adapter.register_hotkeys(bindings)
@@ -210,24 +207,14 @@ class TLLVoiceEngine:
         # Any hotkey immediately stops active audio playback
         sd.stop()
 
-        if mode == 3:
-            # TTS mode: stop any in-progress recording first
-            if self.current_mode is not None:
-                try:
-                    self.recorder.stop()
-                except Exception:
-                    pass
-                self.current_mode = None
-            self._start_tts()
+        if self.current_mode is not None:
+            # Second press: stop and process
+            self.current_mode = None
+            self._stop_and_process(mode)
         else:
-            if self.current_mode is not None:
-                # Second press: stop and process
-                self.current_mode = None
-                self._stop_and_process(mode)
-            else:
-                # First press: start recording
-                self.current_mode = mode
-                self._start_recording(mode)
+            # First press: start recording
+            self.current_mode = mode
+            self._start_recording(mode)
 
     # ==================================================================
     # Recording
@@ -316,52 +303,6 @@ class TLLVoiceEngine:
             _log_debug(f"[Audio] Exception during processing: {e}")
             print(f"[API] Error: {e}", file=sys.stderr)
             self.queue.put(("error", f"API Ошибка: {e}"))
-
-    # ==================================================================
-    # TTS
-    # ==================================================================
-
-    def _start_tts(self) -> None:
-        import pyperclip
-        try:
-            text = pyperclip.paste()
-        except Exception as e:
-            self.queue.put(("error", "Ошибка буфера обмена"))
-            return
-
-        if not text or not text.strip():
-            self.queue.put(("error", "Буфер обмена пуст!"))
-            return
-
-        print("[Engine] Starting TTS…")
-        self.overlay.set_state(STATE_SYNTHESIS)
-        threading.Thread(
-            target=self._process_tts, args=(text.strip(),), daemon=True
-        ).start()
-
-    def _process_tts(self, text: str) -> None:
-        if not self.gemini.is_configured:
-            self.queue.put(("error", "Не настроен API Ключ!"))
-            return
-        try:
-            tts_model = self.config.get("tts_model", "gemini-3.1-flash-lite")
-            from core.config import load_prompt_by_mode
-            sys_prompt, _ = load_prompt_by_mode("mode3")
-            pace = self.config.get("tts_pace", "1.75")
-
-            audio_bytes = self.gemini.synthesize(text, tts_model, sys_prompt, pace)
-            if audio_bytes:
-                self.queue.put(("ui_state", STATE_IDLE))
-                self._play_audio(audio_bytes)
-            else:
-                self.queue.put(("error", "Нет аудио в ответе"))
-        except Exception as e:
-            print(f"[TTS] Error: {e}", file=sys.stderr)
-            self.queue.put(("error", f"TTS Ошибка: {e}"))
-
-    def _play_audio(self, audio_bytes: bytes) -> None:
-        samples, sample_rate = GeminiClient.decode_audio(audio_bytes)
-        sd.play(samples, samplerate=sample_rate)
 
     # ==================================================================
     # Exit

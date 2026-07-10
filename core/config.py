@@ -13,22 +13,18 @@ from dotenv import load_dotenv
 
 _DEFAULT_PROMPTS = {
     "mode1": "Ты — высокоточный ИИ-редактор устной речи. Исправляй грамматику и запинки, сохраняя 100% смысла.",
-    "mode2": "Ты — инструмент буквальной транскрипции (Audio-to-Text). Расставь только точки и запятые для читаемости.",
-    "mode3": "Ты — профессиональный диктор. Озвучь предоставленный текст."
+    "mode2": "Ты — инструмент буквальной транскрипции (Audio-to-Text). Расставь только точки и запятые для читаемости."
 }
 
 _DEFAULT_CONFIG = {
     "api_key": "YOUR_GEMINI_API_KEY",
     "model": "gemini-3.1-flash-lite",
-    "tts_model": "gemini-3.1-flash-lite",
-    "tts_pace": "1.75",
     "temperature": 0.3,
     "hotkeys": {
         "mode1": "alt+caps lock",
-        "mode2": "ctrl+caps lock",
-        "mode3": "ctrl+shift+caps lock",
+        "mode2": "ctrl+caps lock"
     },
-    "modes": ["mode1", "mode2", "mode3"],
+    "modes": ["mode1", "mode2"],
     "audio": {
         "sample_rate": 16000,
         "channels": 1,
@@ -135,8 +131,7 @@ def load_prompt_by_mode(mode: str) -> tuple[str, str | None]:
 
     fallbacks = {
         "mode1": "Ты — голосовой ассистент, переведи аудио в текст без изменений.",
-        "mode2": "Ты — инструмент буквальной транскрипции (Audio-to-Text). Выдавай чистый транскрибированный текст.",
-        "mode3": "Ты — профессиональный диктор. Озвучь предоставленный текст."
+        "mode2": "Ты — инструмент буквальной транскрипции (Audio-to-Text). Выдавай чистый транскрибированный текст."
     }
     return fallbacks.get(mode, "Ты — голосовой ассистент, переведи аудио в текст без изменений."), None
 
