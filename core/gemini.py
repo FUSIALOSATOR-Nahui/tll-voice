@@ -96,7 +96,7 @@ class GeminiClient:
     def synthesize(
         self,
         text: str,
-        tts_model: str = "gemini-2.5-flash-preview-tts",
+        tts_model: str = "gemini-3.1-flash-lite",
         system_prompt: str = "",
         pace: str = "1.75",
     ) -> bytes | None:

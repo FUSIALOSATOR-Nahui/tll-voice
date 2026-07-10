@@ -344,7 +344,7 @@ class TLLVoiceEngine:
             self.queue.put(("error", "Не настроен API Ключ!"))
             return
         try:
-            tts_model = self.config.get("tts_model", "gemini-2.5-flash-preview-tts")
+            tts_model = self.config.get("tts_model", "gemini-3.1-flash-lite")
             from core.config import load_prompt_by_mode
             sys_prompt, _ = load_prompt_by_mode("mode3")
             pace = self.config.get("tts_pace", "1.75")

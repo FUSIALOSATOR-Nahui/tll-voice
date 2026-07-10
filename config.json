@@ -1,7 +1,7 @@
 {
   "api_key": "YOUR_GEMINI_API_KEY",
   "model": "gemini-3.1-flash-lite",
-  "tts_model": "gemini-2.5-flash-preview-tts",
+  "tts_model": "gemini-3.1-flash-lite",
   "tts_pace": "1.75",
   "temperature": 0.3,
   "hotkeys": {
