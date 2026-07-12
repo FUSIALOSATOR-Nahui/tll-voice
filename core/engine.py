@@ -29,6 +29,7 @@ from core.state import (
     STATE_PROCESSING,
     STATE_DONE,
     STATE_ERROR,
+    STATE_SYNTHESIS,
 )
 from core.audio import AudioRecorder
 from core.gemini import GeminiClient
@@ -68,6 +69,7 @@ class TLLVoiceEngine:
         self.adapter = adapter
         self.queue: queue.Queue = queue.Queue()
         self.current_mode: int | None = None
+        self.stop_event = threading.Event()
 
         # --- Sub-systems ---
         self.overlay = Overlay(self.root)
@@ -160,10 +162,12 @@ class TLLVoiceEngine:
         hk = self.config.get("hotkeys", {})
         m1 = str(hk.get("mode1", "alt+caps lock")).strip().lower()
         m2 = str(hk.get("mode2", "ctrl+caps lock")).strip().lower()
+        m3 = str(hk.get("mode3", "ctrl+shift+caps lock")).strip().lower()
 
         bindings = {
             m1: lambda: self.queue.put(("hotkey", 1)),
             m2: lambda: self.queue.put(("hotkey", 2)),
+            m3: lambda: self.queue.put(("hotkey", 3)),
         }
         try:
             self.adapter.register_hotkeys(bindings)
@@ -204,17 +208,34 @@ class TLLVoiceEngine:
     # ==================================================================
 
     def _handle_hotkey(self, mode: int) -> None:
-        # Any hotkey immediately stops active audio playback
+        # Любой хоткей немедленно останавливает воспроизведение и фоновые процессы TTS
         sd.stop()
+        self.stop_event.set()
 
-        if self.current_mode is not None:
-            # Second press: stop and process
-            self.current_mode = None
-            self._stop_and_process(mode)
+        # Ожидаем завершения предыдущих потоков TTS, если они запущены
+        if hasattr(self, "producer_thread") and self.producer_thread and self.producer_thread.is_alive():
+            self.producer_thread.join(timeout=0.2)
+        if hasattr(self, "consumer_thread") and self.consumer_thread and self.consumer_thread.is_alive():
+            self.consumer_thread.join(timeout=0.2)
+
+        if mode == 3:
+            if self.current_mode == 3:
+                # Повторное нажатие: останавливаем воспроизведение
+                self.current_mode = None
+                self.queue.put(("done",))
+            else:
+                self.current_mode = 3
+                self.stop_event.clear()
+                self._start_tts()
         else:
-            # First press: start recording
-            self.current_mode = mode
-            self._start_recording(mode)
+            if self.current_mode is not None:
+                # Второе нажатие: остановить запись и обработать
+                self.current_mode = None
+                self._stop_and_process(mode)
+            else:
+                # Первое нажатие: начать запись
+                self.current_mode = mode
+                self._start_recording(mode)
 
     # ==================================================================
     # Recording
@@ -305,12 +326,99 @@ class TLLVoiceEngine:
             self.queue.put(("error", f"API Ошибка: {e}"))
 
     # ==================================================================
+    # Local TTS Pipeline (Silero + razdel)
+    # ==================================================================
+
+    def _start_tts(self) -> None:
+        print("[Engine] Starting TTS pipeline...")
+        self.tts_audio_queue = queue.Queue()
+        self.queue.put(("ui_state", STATE_SYNTHESIS))
+        
+        self.producer_thread = threading.Thread(target=self._tts_producer, daemon=True)
+        self.consumer_thread = threading.Thread(target=self._tts_consumer, daemon=True)
+        
+        self.producer_thread.start()
+        self.consumer_thread.start()
+
+    def _tts_producer(self) -> None:
+        try:
+            import pyperclip
+            from razdel import sentenize
+            from core.tts import LocalTTSEngine
+
+            # Чтение буфера обмена СТРОГО в фоновом потоке
+            text = pyperclip.paste()
+            if not text or not text.strip():
+                print("[TTS Producer] Clipboard is empty.")
+                self.queue.put(("error", "Буфер обмена пуст!"))
+                self.tts_audio_queue.put(None)
+                return
+
+            print(f"[TTS Producer] Loaded text from clipboard: {len(text)} chars.")
+
+            # Ленивая инициализация LocalTTSEngine
+            if not hasattr(self, "tts_engine") or self.tts_engine is None:
+                print("[TTS Producer] Initializing LocalTTSEngine...")
+                tts_config = self.config.get("tts", {})
+                lang = tts_config.get("lang", "ru")
+                speaker = tts_config.get("speaker", "xenia")
+                self.tts_engine = LocalTTSEngine(lang=lang, speaker=speaker)
+
+            speed = float(self.config.get("tts", {}).get("speed", 1.5))
+            
+            # Нарезка текста СТРОГО в фоновом потоке
+            sentences = list(sentenize(text))
+            print(f"[TTS Producer] Split text into {len(sentences)} sentences.")
+
+            for sent in sentences:
+                if self.stop_event.is_set():
+                    break
+                sent_text = sent.text.strip()
+                if not sent_text:
+                    continue
+
+                audio_data, sample_rate = self.tts_engine.synthesize(sent_text, speed=speed)
+                
+                if self.stop_event.is_set():
+                    break
+                self.tts_audio_queue.put((audio_data, sample_rate))
+
+        except Exception as e:
+            print(f"[TTS Producer] Error: {e}", file=sys.stderr)
+            self.queue.put(("error", f"Ошибка синтеза: {e}"))
+        finally:
+            self.tts_audio_queue.put(None)
+
+    def _tts_consumer(self) -> None:
+        try:
+            while not self.stop_event.is_set():
+                chunk = self.tts_audio_queue.get()
+                if chunk is None:
+                    break
+                audio_data, sample_rate = chunk
+                
+                if self.stop_event.is_set():
+                    break
+                sd.play(audio_data, sample_rate)
+                sd.wait()
+
+        except Exception as e:
+            print(f"[TTS Consumer] Error: {e}", file=sys.stderr)
+            self.queue.put(("error", f"Ошибка воспроизведения: {e}"))
+        finally:
+            sd.stop()
+            if not self.stop_event.is_set():
+                self.current_mode = None
+                self.queue.put(("done",))
+
+    # ==================================================================
     # Exit
     # ==================================================================
 
     def on_exit(self) -> None:
         print("[Engine] Exiting…")
         sd.stop()
+        self.stop_event.set()
         self.tray.stop()
         self.adapter.cleanup()
         self.queue.put(("exit",))

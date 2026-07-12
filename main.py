@@ -1,5 +1,5 @@
 """
-main.py — TLL-Voice Bootstrapper (v0.5.4)
+main.py — TLL-Voice Bootstrapper (v0.6.2)
 
 Single responsibility: determine the OS, inject the correct platform adapter
 into the Core engine, and start the Tkinter event loop.

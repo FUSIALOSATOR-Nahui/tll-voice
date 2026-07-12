@@ -4,12 +4,19 @@
   "temperature": 0.3,
   "hotkeys": {
     "mode1": "alt+caps lock",
-    "mode2": "ctrl+caps lock"
+    "mode2": "ctrl+caps lock",
+    "mode3": "ctrl+shift+caps lock"
   },
   "modes": [
     "mode1",
-    "mode2"
+    "mode2",
+    "mode3"
   ],
+  "tts": {
+    "lang": "ru",
+    "speaker": "eugene",
+    "speed": 2.0
+  },
   "audio": {
     "sample_rate": 16000,
     "channels": 1,

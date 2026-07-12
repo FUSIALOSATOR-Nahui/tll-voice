@@ -12,6 +12,7 @@ from core.state import (
     STATE_PROCESSING,
     STATE_DONE,
     STATE_ERROR,
+    STATE_SYNTHESIS,
 )
 
 
@@ -120,6 +121,11 @@ class Overlay:
             self.label_title.configure(text="ОШИБКА", fg=self.ACCENT_RED)
             self.label_status.configure(text=short)
             self.canvas.itemconfigure(self.indicator, fill=self.ACCENT_RED)
+
+        elif state == STATE_SYNTHESIS:
+            self.label_title.configure(text="ЧТЕНИЕ (TTS)", fg=self.ACCENT_PURPLE)
+            self.label_status.configure(text="Воспроизведение текста...")
+            self.canvas.itemconfigure(self.indicator, fill=self.ACCENT_PURPLE)
 
     # ------------------------------------------------------------------
     # VU Meter animation (called from engine via root.after)

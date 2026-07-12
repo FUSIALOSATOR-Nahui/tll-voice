@@ -24,8 +24,8 @@ class TestTTSMinimal(unittest.TestCase):
         self.assertGreater(len(audio_data), 0)
         self.assertIsInstance(target_sample_rate, int)
         
-        # 24000 * 1.5 = 36000
-        self.assertEqual(target_sample_rate, 36000)
+        # С фазовым вокодером частота дискретизации остается исходной
+        self.assertEqual(target_sample_rate, 48000)
 
 if __name__ == "__main__":
     unittest.main()
