@@ -17,7 +17,6 @@ class TestProxyConfig(unittest.TestCase):
     @patch("core.gemini.genai.Client")
     def test_gemini_client_configure_without_proxy(self, mock_client_cls):
         client = GeminiClient()
-        # Normal configuration
         success = client.configure("valid_api_key")
         self.assertTrue(success)
         mock_client_cls.assert_called_once_with(api_key="valid_api_key")
@@ -25,16 +24,97 @@ class TestProxyConfig(unittest.TestCase):
     @patch("core.gemini.genai.Client")
     def test_gemini_client_configure_with_proxy(self, mock_client_cls):
         client = GeminiClient()
-        # Configuration with api_host proxy
         success = client.configure("valid_api_key", api_host="http://127.0.0.1:3002")
         self.assertTrue(success)
-        # Check that it passed http_options with the base_url set
         mock_client_cls.assert_called_once()
         args, kwargs = mock_client_cls.call_args
         self.assertEqual(kwargs.get("api_key"), "valid_api_key")
         http_opts = kwargs.get("http_options")
         self.assertIsNotNone(http_opts)
         self.assertEqual(http_opts.base_url, "http://127.0.0.1:3002")
+
+    @patch("core.gemini.genai.Client")
+    def test_gemini_client_configure_with_fallback(self, mock_client_cls):
+        client = GeminiClient()
+        # Mock class returns different client instances for different calls
+        client_primary = MagicMock()
+        client_fallback = MagicMock()
+        mock_client_cls.side_effect = [client_primary, client_fallback]
+
+        success = client.configure(
+            api_key="primary_key",
+            api_host="http://primary:3000",
+            fallback_key="fallback_key",
+            fallback_host="http://fallback:3002"
+        )
+        self.assertTrue(success)
+        self.assertEqual(client.client, client_primary)
+        self.assertEqual(client.fallback_client, client_fallback)
+        self.assertEqual(mock_client_cls.call_count, 2)
+
+    def test_transcribe_with_fallback_success_on_primary_failure(self):
+        client = GeminiClient()
+        client.client = MagicMock()
+        client.fallback_client = MagicMock()
+
+        # Primary client fails with an API Error
+        client.client.models.generate_content.side_effect = Exception("Primary failed")
+        
+        # Fallback client succeeds
+        mock_response = MagicMock()
+        mock_response.text = "Fallback transcription text"
+        client.fallback_client.models.generate_content.return_value = mock_response
+
+        wav_bytes = b"fake wav bytes"
+        res = client.transcribe(
+            wav_bytes=wav_bytes,
+            system_instruction="System prompt",
+            prompt="User prompt",
+            model_name="gemini-3.1-flash-lite"
+        )
+
+        self.assertEqual(res, "Fallback transcription text")
+        # Check both were called
+        client.client.models.generate_content.assert_called_once()
+        client.fallback_client.models.generate_content.assert_called_once()
+
+    def test_transcribe_both_primary_and_fallback_fail(self):
+        client = GeminiClient()
+        client.client = MagicMock()
+        client.fallback_client = MagicMock()
+
+        client.client.models.generate_content.side_effect = Exception("Primary failed")
+        client.fallback_client.models.generate_content.side_effect = Exception("Fallback failed")
+
+        wav_bytes = b"fake wav bytes"
+        with self.assertRaises(Exception) as context:
+            client.transcribe(
+                wav_bytes=wav_bytes,
+                system_instruction="System prompt",
+                prompt="User prompt"
+            )
+        self.assertIn("Fallback failed", str(context.exception))
+
+    def test_transcribe_primary_success_no_fallback_called(self):
+        client = GeminiClient()
+        client.client = MagicMock()
+        client.fallback_client = MagicMock()
+
+        mock_response = MagicMock()
+        mock_response.text = "Primary transcription text"
+        client.client.models.generate_content.return_value = mock_response
+
+        wav_bytes = b"fake wav bytes"
+        res = client.transcribe(
+            wav_bytes=wav_bytes,
+            system_instruction="System prompt",
+            prompt="User prompt"
+        )
+
+        self.assertEqual(res, "Primary transcription text")
+        client.client.models.generate_content.assert_called_once()
+        # Fallback client should NOT be called
+        client.fallback_client.models.generate_content.assert_not_called()
 
     @patch("core.engine.sd")
     @patch("core.engine.TrayIcon")
@@ -44,7 +124,6 @@ class TestProxyConfig(unittest.TestCase):
         mock_gemini_client = mock_gemini_client_cls.return_value
         root = MagicMock()
         
-        # Test config having api_host
         config = {
             "api_key": "dummy_key",
             "api_host": "http://127.0.0.1:3002",
@@ -54,18 +133,26 @@ class TestProxyConfig(unittest.TestCase):
         adapter = MagicMock()
         
         engine = TLLVoiceEngine(root, config, adapter)
-        mock_gemini_client.configure.assert_called_once_with("dummy_key", api_host="http://127.0.0.1:3002")
+        mock_gemini_client.configure.assert_called_once_with(
+            "dummy_key", 
+            api_host="http://127.0.0.1:3002",
+            fallback_key=None,
+            fallback_host=None
+        )
 
     @patch("core.engine.sd")
     @patch("core.engine.TrayIcon")
     @patch("core.engine.Overlay")
     @patch("core.engine.GeminiClient")
-    @patch.dict(os.environ, {"GEMINI_API_HOST": "http://178.159.94.14/gemini"})
-    def test_engine_setup_gemini_env_host(self, mock_gemini_client_cls, mock_overlay_cls, mock_tray_cls, mock_sd):
+    @patch.dict(os.environ, {
+        "GEMINI_API_HOST": "http://primary:3000",
+        "GEMINI_FALLBACK_API_KEY": "fallback_val",
+        "GEMINI_FALLBACK_API_HOST": "http://fallback:3002"
+    })
+    def test_engine_setup_gemini_fallback_env(self, mock_gemini_client_cls, mock_overlay_cls, mock_tray_cls, mock_sd):
         mock_gemini_client = mock_gemini_client_cls.return_value
         root = MagicMock()
         
-        # Test env variable fallback
         config = {
             "api_key": "dummy_key",
             "audio": {},
@@ -74,7 +161,12 @@ class TestProxyConfig(unittest.TestCase):
         adapter = MagicMock()
         
         engine = TLLVoiceEngine(root, config, adapter)
-        mock_gemini_client.configure.assert_called_once_with("dummy_key", api_host="http://178.159.94.14/gemini")
+        mock_gemini_client.configure.assert_called_once_with(
+            "dummy_key",
+            api_host="http://primary:3000",
+            fallback_key="fallback_val",
+            fallback_host="http://fallback:3002"
+        )
 
 if __name__ == "__main__":
     unittest.main()

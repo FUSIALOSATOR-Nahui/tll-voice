@@ -158,7 +158,20 @@ class TLLVoiceEngine:
         api_host = self.config.get("api_host", "")
         if not api_host:
             api_host = os.environ.get("GEMINI_API_HOST", "")
-        self.gemini.configure(api_key, api_host=api_host or None)
+
+        fallback_key = self.config.get("fallback_api_key", "")
+        if not fallback_key:
+            fallback_key = os.environ.get("GEMINI_FALLBACK_API_KEY", "")
+        fallback_host = self.config.get("fallback_api_host", "")
+        if not fallback_host:
+            fallback_host = os.environ.get("GEMINI_FALLBACK_API_HOST", "")
+
+        self.gemini.configure(
+            api_key,
+            api_host=api_host or None,
+            fallback_key=fallback_key or None,
+            fallback_host=fallback_host or None
+        )
 
     def _bind_hotkeys(self) -> None:
         """Build hotkey→callback mapping and hand it to the platform adapter."""
