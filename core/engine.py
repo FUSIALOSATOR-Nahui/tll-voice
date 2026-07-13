@@ -155,7 +155,10 @@ class TLLVoiceEngine:
         api_key = self.config.get("api_key", "")
         if not api_key or api_key == "YOUR_GEMINI_API_KEY":
             api_key = os.environ.get("GEMINI_API_KEY", "")
-        self.gemini.configure(api_key)
+        api_host = self.config.get("api_host", "")
+        if not api_host:
+            api_host = os.environ.get("GEMINI_API_HOST", "")
+        self.gemini.configure(api_key, api_host=api_host or None)
 
     def _bind_hotkeys(self) -> None:
         """Build hotkey→callback mapping and hand it to the platform adapter."""

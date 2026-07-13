@@ -22,9 +22,9 @@ class GeminiClient:
     def __init__(self):
         self.client: genai.Client | None = None
 
-    def configure(self, api_key: str) -> bool:
+    def configure(self, api_key: str, api_host: str | None = None) -> bool:
         """
-        Configure the SDK with the provided API key.
+        Configure the SDK with the provided API key and optional api_host proxy.
         Returns True on success, False if key is missing/placeholder.
         """
         if not api_key or api_key == "YOUR_GEMINI_API_KEY":
@@ -34,7 +34,14 @@ class GeminiClient:
             )
             self.client = None
             return False
-        self.client = genai.Client(api_key=api_key)
+        
+        if api_host:
+            self.client = genai.Client(
+                api_key=api_key,
+                http_options=types.HttpOptions(base_url=api_host)
+            )
+        else:
+            self.client = genai.Client(api_key=api_key)
         
         # Warm up Pydantic schemas in the main thread to prevent deadlocks in background threads on Windows
         try:
