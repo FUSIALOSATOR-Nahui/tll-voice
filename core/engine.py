@@ -32,7 +32,7 @@ from core.state import (
     STATE_SYNTHESIS,
 )
 from core.audio import AudioRecorder
-from core.gemini import GeminiClient
+from core.gemini import GeminiClient, RepetitionDetectedError
 from core.gui.overlay import Overlay
 from core.gui.tray import TrayIcon
 
@@ -302,6 +302,21 @@ class TLLVoiceEngine:
             target=self._process_audio, args=(wav_bytes, mode), daemon=True
         ).start()
 
+    def _dump_audio_to_disk(self, wav_bytes: bytes, prefix: str) -> None:
+        try:
+            import pathlib
+            from datetime import datetime
+            project_root = pathlib.Path(__file__).resolve().parent.parent
+            dump_dir = project_root / "debug_dumps"
+            dump_dir.mkdir(parents=True, exist_ok=True)
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = dump_dir / f"{prefix}_{timestamp}.wav"
+            filename.write_bytes(wav_bytes)
+            _log_debug(f"[Cache] Dumped audio to {filename}")
+        except Exception as e:
+            _log_debug(f"[Cache] Failed to dump audio: {e}")
+
     def _process_audio(self, wav_bytes: bytes, mode: int) -> None:
         _log_debug(f"[Audio] Start processing mode {mode}. Wav size: {len(wav_bytes)}")
         if not self.gemini.is_configured:
@@ -336,9 +351,14 @@ class TLLVoiceEngine:
             else:
                 _log_debug("[Audio] Empty response from API")
                 self.queue.put(("error", "Пустой ответ API"))
+        except RepetitionDetectedError as re:
+            _log_debug(f"[Audio] Repetition detected: {re}")
+            self._dump_audio_to_disk(wav_bytes, prefix="loop")
+            self.queue.put(("error", "Обнаружено зацикливание!"))
         except Exception as e:
             _log_debug(f"[Audio] Exception during processing: {e}")
             print(f"[API] Error: {e}", file=sys.stderr)
+            self._dump_audio_to_disk(wav_bytes, prefix="err")
             self.queue.put(("error", f"API Ошибка: {e}"))
 
     # ==================================================================

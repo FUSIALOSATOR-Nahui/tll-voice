@@ -24,3 +24,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Debug dumps
+debug_dumps/

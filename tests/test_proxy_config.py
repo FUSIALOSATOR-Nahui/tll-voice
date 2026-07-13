@@ -19,7 +19,12 @@ class TestProxyConfig(unittest.TestCase):
         client = GeminiClient()
         success = client.configure("valid_api_key")
         self.assertTrue(success)
-        mock_client_cls.assert_called_once_with(api_key="valid_api_key")
+        mock_client_cls.assert_called_once()
+        args, kwargs = mock_client_cls.call_args
+        self.assertEqual(kwargs.get("api_key"), "valid_api_key")
+        http_opts = kwargs.get("http_options")
+        self.assertIsNotNone(http_opts)
+        self.assertEqual(http_opts.timeout, 10000)
 
     @patch("core.gemini.genai.Client")
     def test_gemini_client_configure_with_proxy(self, mock_client_cls):
@@ -32,11 +37,11 @@ class TestProxyConfig(unittest.TestCase):
         http_opts = kwargs.get("http_options")
         self.assertIsNotNone(http_opts)
         self.assertEqual(http_opts.base_url, "http://127.0.0.1:3002")
+        self.assertEqual(http_opts.timeout, 10000)
 
     @patch("core.gemini.genai.Client")
     def test_gemini_client_configure_with_fallback(self, mock_client_cls):
         client = GeminiClient()
-        # Mock class returns different client instances for different calls
         client_primary = MagicMock()
         client_fallback = MagicMock()
         mock_client_cls.side_effect = [client_primary, client_fallback]
@@ -51,6 +56,14 @@ class TestProxyConfig(unittest.TestCase):
         self.assertEqual(client.client, client_primary)
         self.assertEqual(client.fallback_client, client_fallback)
         self.assertEqual(mock_client_cls.call_count, 2)
+        
+        # Check call arguments
+        calls = mock_client_cls.call_args_list
+        primary_kwargs = calls[0].kwargs
+        fallback_kwargs = calls[1].kwargs
+        
+        self.assertEqual(primary_kwargs.get("http_options").timeout, 10000)
+        self.assertEqual(fallback_kwargs.get("http_options").timeout, 30000)
 
     def test_transcribe_with_fallback_success_on_primary_failure(self):
         client = GeminiClient()
@@ -120,6 +133,12 @@ class TestProxyConfig(unittest.TestCase):
     @patch("core.engine.TrayIcon")
     @patch("core.engine.Overlay")
     @patch("core.engine.GeminiClient")
+    @patch.dict(os.environ, {
+        "GEMINI_API_KEY": "",
+        "GEMINI_API_HOST": "",
+        "GEMINI_FALLBACK_API_KEY": "",
+        "GEMINI_FALLBACK_API_HOST": ""
+    })
     def test_engine_setup_gemini_config_host(self, mock_gemini_client_cls, mock_overlay_cls, mock_tray_cls, mock_sd):
         mock_gemini_client = mock_gemini_client_cls.return_value
         root = MagicMock()

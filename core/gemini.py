@@ -13,6 +13,39 @@ from google import genai
 from google.genai import types
 
 
+class RepetitionDetectedError(Exception):
+    """Выбрасывается при обнаружении бесконечного зацикливания в ответе модели."""
+    pass
+
+
+def detect_repetition(text: str) -> bool:
+    # Normalize text (lower case and keep alphanumeric words)
+    words = [w.lower() for w in text.split() if w.isalnum()]
+    if len(words) < 10:
+        return False
+
+    # 1. Check for consecutive word repetitions (4+ times)
+    consecutive_count = 1
+    for i in range(1, len(words)):
+        if words[i] == words[i-1]:
+            consecutive_count += 1
+            if consecutive_count >= 4:
+                return True
+        else:
+            consecutive_count = 1
+
+    # 2. Check phrase repetitions of 2, 3 or 4 words (3+ times consecutively)
+    for n in [2, 3, 4]:
+        if len(words) >= n * 3:
+            for i in range(len(words) - 3 * n + 1):
+                chunk1 = words[i : i + n]
+                chunk2 = words[i + n : i + 2 * n]
+                chunk3 = words[i + 2 * n : i + 3 * n]
+                if chunk1 == chunk2 == chunk3:
+                    return True
+    return False
+
+
 class GeminiClient:
     """
     Wraps Google Generative AI SDK for transcription:
@@ -45,20 +78,26 @@ class GeminiClient:
             if api_host:
                 self.client = genai.Client(
                     api_key=api_key,
-                    http_options=types.HttpOptions(base_url=api_host)
+                    http_options=types.HttpOptions(base_url=api_host, timeout=10000)
                 )
             else:
-                self.client = genai.Client(api_key=api_key)
+                self.client = genai.Client(
+                    api_key=api_key,
+                    http_options=types.HttpOptions(timeout=10000)
+                )
 
         # Configure Fallback Client
         if fallback_key and fallback_key != "YOUR_GEMINI_API_KEY":
             if fallback_host:
                 self.fallback_client = genai.Client(
                     api_key=fallback_key,
-                    http_options=types.HttpOptions(base_url=fallback_host)
+                    http_options=types.HttpOptions(base_url=fallback_host, timeout=30000)
                 )
             else:
-                self.fallback_client = genai.Client(api_key=fallback_key)
+                self.fallback_client = genai.Client(
+                    api_key=fallback_key,
+                    http_options=types.HttpOptions(timeout=30000)
+                )
         else:
             self.fallback_client = None
 
@@ -122,8 +161,13 @@ class GeminiClient:
                     config=config,
                 )
                 if response and response.text:
-                    return response.text.strip()
+                    res_text = response.text.strip()
+                    if detect_repetition(res_text):
+                        raise RepetitionDetectedError("Обнаружено зацикливание!")
+                    return res_text
                 return ""
+            except RepetitionDetectedError:
+                raise
             except Exception as e:
                 print(f"[Gemini] Primary channel failed: {e}. Swapping to fallback proxy...", file=sys.stderr)
                 last_exception = e
@@ -137,8 +181,13 @@ class GeminiClient:
                     config=config,
                 )
                 if response and response.text:
-                    return response.text.strip()
+                    res_text = response.text.strip()
+                    if detect_repetition(res_text):
+                        raise RepetitionDetectedError("Обнаружено зацикливание!")
+                    return res_text
                 return ""
+            except RepetitionDetectedError:
+                raise
             except Exception as e:
                 print(f"[Gemini] Fallback channel failed: {e}", file=sys.stderr)
                 last_exception = e
