@@ -18,7 +18,7 @@ _DEFAULT_PROMPTS = {
 
 _DEFAULT_CONFIG = {
     "api_key": "YOUR_GEMINI_API_KEY",
-    "model": "gemini-3.1-flash-lite",
+    "model": "gemini-3.5-flash-lite",
     "temperature": 0.3,
     "hotkeys": {
         "mode1": "alt+caps lock",

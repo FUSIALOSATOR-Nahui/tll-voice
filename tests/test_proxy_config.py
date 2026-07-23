@@ -83,7 +83,7 @@ class TestProxyConfig(unittest.TestCase):
             wav_bytes=wav_bytes,
             system_instruction="System prompt",
             prompt="User prompt",
-            model_name="gemini-3.1-flash-lite"
+            model_name="gemini-3.5-flash-lite"
         )
 
         self.assertEqual(res, "Fallback transcription text")

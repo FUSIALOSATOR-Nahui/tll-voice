@@ -109,7 +109,7 @@ class GeminiClient:
             _ = types.GenerateContentConfig(
                 temperature=0.3,
                 system_instruction="warmup",
-                thinking_config=types.ThinkingConfig(thinking_budget=0)
+                thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.MINIMAL)
             )
             _ = types.Part.from_bytes(data=b"", mime_type="audio/wav")
             print("[Gemini] Warmup completed successfully.")
@@ -127,7 +127,7 @@ class GeminiClient:
         wav_bytes: bytes,
         system_instruction: str,
         prompt: str | None = None,
-        model_name: str = "gemini-3.1-flash-lite",
+        model_name: str = "gemini-3.5-flash-lite",
         temperature: float = 0.3,
     ) -> str:
         """
@@ -143,11 +143,11 @@ class GeminiClient:
         if prompt:
             contents.append(prompt)
         
-        # Explicitly configure thinking_budget = 0 to completely disable step-by-step thinking
+        # Explicitly configure thinking_level = MINIMAL to optimize low-latency responses
         config = types.GenerateContentConfig(
             temperature=temperature,
             system_instruction=system_instruction,
-            thinking_config=types.ThinkingConfig(thinking_budget=0)
+            thinking_config=types.ThinkingConfig(thinking_level=types.ThinkingLevel.MINIMAL)
         )
         
         last_exception = None

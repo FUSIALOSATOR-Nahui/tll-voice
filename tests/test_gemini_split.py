@@ -76,7 +76,7 @@ class TestGeminiSplit(unittest.TestCase):
             wav_bytes=wav_bytes,
             system_instruction=system_instr,
             prompt=None,
-            model_name="gemini-3.1-flash-lite"
+            model_name="gemini-3.5-flash-lite"
         )
         
         self.assertEqual(res, "Transcribed text")
@@ -85,7 +85,7 @@ class TestGeminiSplit(unittest.TestCase):
         client.client.models.generate_content.assert_called_once()
         args, kwargs = client.client.models.generate_content.call_args
         
-        self.assertEqual(kwargs["model"], "gemini-3.1-flash-lite")
+        self.assertEqual(kwargs["model"], "gemini-3.5-flash-lite")
         # Проверяем contents: должен быть только audio_part
         self.assertEqual(len(kwargs["contents"]), 1)
         self.assertEqual(kwargs["contents"][0].inline_data.mime_type, "audio/wav")
@@ -94,7 +94,8 @@ class TestGeminiSplit(unittest.TestCase):
         # Проверяем GenerateContentConfig
         config = kwargs["config"]
         self.assertEqual(config.system_instruction, system_instr)
-        self.assertEqual(config.thinking_config.thinking_budget, 0)
+        from google.genai import types
+        self.assertEqual(config.thinking_config.thinking_level, types.ThinkingLevel.MINIMAL)
 
     @patch("core.gemini.genai")
     def test_gemini_client_transcribe_with_user_prompt(self, mock_genai):
@@ -114,7 +115,7 @@ class TestGeminiSplit(unittest.TestCase):
             wav_bytes=wav_bytes,
             system_instruction=system_instr,
             prompt=user_prompt,
-            model_name="gemini-3.1-flash-lite"
+            model_name="gemini-3.5-flash-lite"
         )
         
         self.assertEqual(res, "Transcribed text with prompt")
@@ -132,7 +133,8 @@ class TestGeminiSplit(unittest.TestCase):
         # Проверяем GenerateContentConfig
         config = kwargs["config"]
         self.assertEqual(config.system_instruction, system_instr)
-        self.assertEqual(config.thinking_config.thinking_budget, 0)
+        from google.genai import types
+        self.assertEqual(config.thinking_config.thinking_level, types.ThinkingLevel.MINIMAL)
 
 if __name__ == "__main__":
     unittest.main()
